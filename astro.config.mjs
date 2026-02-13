@@ -5,7 +5,8 @@ import mermaid from 'astro-mermaid';
 
 // https://astro.build/config
 export default defineConfig({
-	site: 'https://example.com',
+	site: 'https://premix-labs.github.io',
+	base: '/langchain-tutorial-book',
 	integrations: [
 		starlight({
 			disable404Route: true,
