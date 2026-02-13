@@ -1,0 +1,340 @@
+---
+title: "บทที่ 4: Prompt Templates และ Output Parsers"
+description: "เทคนิคขั้นสูงในการสร้าง Prompt ที่มีประสิทธิภาพ และแปลงผลลัพธ์จาก LLM ให้ใช้งานได้จริง"
+sidebar:
+  order: 4
+---
+
+import {
+  Aside,
+  Tabs,
+  TabItem,
+  Steps,
+  Card,
+  CardGrid,
+} from "@astrojs/starlight/components";
+
+## ทำไม Prompt Engineering ถึงสำคัญ?
+
+Prompt คือ **สิ่งเดียว** ที่เราใช้สื่อสารกับ LLM ดังนั้น Prompt ที่ดีจะทำให้ได้ผลลัพธ์ที่ดี และ Prompt ที่ไม่ดีจะทำให้ได้ผลลัพธ์ที่แย่
+
+```
+Prompt ดี  → ผลลัพธ์ดี  ✅
+Prompt แย่ → ผลลัพธ์แย่ ❌
+```
+
+---
+
+## ChatPromptTemplate
+
+### Basic Template
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+
+# สร้าง template พื้นฐาน
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "คุณเป็นผู้เชี่ยวชาญด้าน {expertise}. ตอบกระชับ ชัดเจน"),
+    ("human", "{question}"),
+])
+
+# ใช้งาน
+result = prompt.invoke({
+    "expertise": "Python Programming",
+    "question": "Lambda function คืออะไร?"
+})
+print(result)
+```
+
+### Template กับ Multiple Variables
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python
+prompt = ChatPromptTemplate.from_messages([
+    ("system", """คุณเป็นนักแปลภาษามืออาชีพ
+    - แปลจาก {source_lang} เป็น {target_lang}
+    - รักษาน้ำเสียงและความหมายเดิม
+    - ถ้ามีศัพท์เทคนิค ให้ใส่คำอังกฤษกำกับในวงเล็บ"""),
+    ("human", "แปลข้อความนี้: {text}"),
+])
+
+chain = prompt | llm | StrOutputParser()
+result = chain.invoke({
+    "source_lang": "อังกฤษ",
+    "target_lang": "ไทย",
+    "text": "Machine learning is a subset of artificial intelligence."
+})
+print(result)
+# Machine Learning (การเรียนรู้ของเครื่อง) เป็นส่วนย่อยของ
+# ปัญญาประดิษฐ์ (Artificial Intelligence)
+```
+
+---
+
+## Few-Shot Prompting
+
+### ใส่ตัวอย่างเพื่อให้ AI เข้าใจ pattern
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python
+from langchain_core.prompts import ChatPromptTemplate, FewShotChatMessagePromptTemplate
+
+# ตัวอย่างสำหรับ few-shot
+examples = [
+    {"input": "สบายดีไหม", "output": "How are you?"},
+    {"input": "ขอบคุณมาก", "output": "Thank you very much"},
+    {"input": "ไม่เป็นไร", "output": "You're welcome / No problem"},
+]
+
+# สร้าง example prompt
+example_prompt = ChatPromptTemplate.from_messages([
+    ("human", "{input}"),
+    ("ai", "{output}"),
+])
+
+# สร้าง few-shot prompt
+few_shot_prompt = FewShotChatMessagePromptTemplate(
+    example_prompt=example_prompt,
+    examples=examples,
+)
+
+# รวมกับ prompt หลัก
+final_prompt = ChatPromptTemplate.from_messages([
+    ("system", "คุณเป็นนักแปลไทย-อังกฤษ แปลแบบเป็นธรรมชาติ"),
+    few_shot_prompt,
+    ("human", "{input}"),
+])
+
+chain = final_prompt | llm | StrOutputParser()
+result = chain.invoke({"input": "กินข้าวยัง"})
+print(result)  # "Have you eaten yet?"
+```
+
+---
+
+## Dynamic Prompt Selection
+
+### เลือก prompt ตามเงื่อนไข
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python
+from langchain_core.prompts import ChatPromptTemplate
+
+# สร้าง prompts สำหรับแต่ละงาน
+prompts = {
+    "summarize": ChatPromptTemplate.from_messages([
+        ("system", "สรุปข้อความต่อไปนี้ให้กระชับ ไม่เกิน 3 ประโยค"),
+        ("human", "{text}"),
+    ]),
+    "translate": ChatPromptTemplate.from_messages([
+        ("system", "แปลข้อความเป็น {target_lang}"),
+        ("human", "{text}"),
+    ]),
+    "analyze": ChatPromptTemplate.from_messages([
+        ("system", "วิเคราะห์ sentiment ของข้อความ ตอบเป็น: Positive/Negative/Neutral พร้อมเหตุผล"),
+        ("human", "{text}"),
+    ]),
+}
+
+def process_text(task: str, **kwargs):
+    prompt = prompts[task]
+    chain = prompt | llm | StrOutputParser()
+    return chain.invoke(kwargs)
+
+# ใช้งาน
+result = process_text("summarize", text="ข้อความยาวๆ ...")
+result = process_text("translate", text="Hello", target_lang="ไทย")
+result = process_text("analyze", text="อาหารร้านนี้อร่อยมาก!")
+```
+
+---
+
+## Output Parsers แบบละเอียด
+
+### 1. StrOutputParser — แปลงเป็น String
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python
+from langchain_core.output_parsers import StrOutputParser
+
+parser = StrOutputParser()
+chain = prompt | llm | parser
+
+# ผลลัพธ์เป็น string เสมอ
+result = chain.invoke({"question": "Python คืออะไร?"})
+type(result)  # str
+```
+
+### 2. PydanticOutputParser — แปลงเป็น Object
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python
+from langchain_core.output_parsers import PydanticOutputParser
+from pydantic import BaseModel, Field
+
+class BookInfo(BaseModel):
+    title: str = Field(description="ชื่อหนังสือ")
+    author: str = Field(description="ชื่อผู้แต่ง")
+    genre: str = Field(description="ประเภท")
+    year: int = Field(description="ปีที่พิมพ์")
+    summary: str = Field(description="สรุปเนื้อหาสั้นๆ")
+
+parser = PydanticOutputParser(pydantic_object=BookInfo)
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "วิเคราะห์หนังสือและตอบในรูปแบบ JSON\n{format_instructions}"),
+    ("human", "วิเคราะห์หนังสือ: {book_name}"),
+])
+
+chain = prompt.partial(
+    format_instructions=parser.get_format_instructions()
+) | llm | parser
+
+result = chain.invoke({"book_name": "Harry Potter and the Philosopher's Stone"})
+print(f"ชื่อ: {result.title}")
+print(f"ผู้แต่ง: {result.author}")
+print(f"ปี: {result.year}")
+```
+
+### 3. CommaSeparatedListOutputParser — แปลงเป็น List
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python
+from langchain_core.output_parsers import CommaSeparatedListOutputParser
+
+parser = CommaSeparatedListOutputParser()
+
+prompt = ChatPromptTemplate.from_template(
+    "บอกชื่อ {category} มา 5 อย่าง คั่นด้วยเครื่องหมายจุลภาค\n{format_instructions}"
+)
+
+chain = prompt.partial(
+    format_instructions=parser.get_format_instructions()
+) | llm | parser
+
+result = chain.invoke({"category": "ผลไม้ไทย"})
+print(result)
+# ['มะม่วง', 'ทุเรียน', 'มังคุด', 'ลำไย', 'เงาะ']
+```
+
+---
+
+## Structured Output (แนะนำ ⭐)
+
+วิธีที่ดีที่สุดสำหรับ structured data — ไม่ต้องใช้ Output Parser:
+
+```python
+from pydantic import BaseModel, Field
+from langchain_openai import ChatOpenAI
+
+class TaskAnalysis(BaseModel):
+    """วิเคราะห์งานที่ต้องทำ"""
+    task_name: str = Field(description="ชื่องาน")
+    priority: str = Field(description="ความสำคัญ: high/medium/low")
+    estimated_hours: float = Field(description="เวลาโดยประมาณ (ชั่วโมง)")
+    subtasks: list[str] = Field(description="งานย่อย")
+    tools_needed: list[str] = Field(description="เครื่องมือที่ต้องใช้")
+
+llm = ChatOpenAI(model="gpt-4o-mini")
+structured_llm = llm.with_structured_output(TaskAnalysis)
+
+result = structured_llm.invoke(
+    "วิเคราะห์งาน: สร้างเว็บ e-commerce ด้วย Next.js"
+)
+
+print(f"📋 งาน: {result.task_name}")
+print(f"🔥 ความสำคัญ: {result.priority}")
+print(f"⏱️ เวลา: {result.estimated_hours} ชม.")
+print(f"📝 งานย่อย:")
+for st in result.subtasks:
+    print(f"  - {st}")
+```
+
+<Aside type="tip">
+  **with_structured_output()** ใช้ **function calling** ของ LLM ภายใน
+  จึงมีความน่าเชื่อถือสูงกว่าการ parse JSON จาก text ธรรมดา
+</Aside>
+
+---
+
+## เทคนิค Prompt Engineering
+
+### 1. Role Playing
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python
+prompt = ChatPromptTemplate.from_messages([
+    ("system", """คุณเป็น Senior Software Architect ที่มีประสบการณ์ 15 ปี
+    - ตอบโดยพิจารณา scalability, maintainability, และ security
+    - ให้ข้อดีข้อเสียของแต่ละทางเลือก
+    - ใช้ภาษาที่เข้าใจง่าย"""),
+    ("human", "{question}"),
+])
+```
+
+### 2. Chain of Thought (CoT)
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python
+prompt = ChatPromptTemplate.from_messages([
+    ("system", """ตอบคำถามโดย:
+    1. คิดทีละขั้นตอน (step by step)
+    2. แสดงการคิดของแต่ละขั้นตอน
+    3. สรุปคำตอบสุดท้าย"""),
+    ("human", "{question}"),
+])
+```
+
+### 3. Output Format Specification
+
+คำอธิบาย: ตัวอย่างด้านล่างแสดงรูปแบบการใช้งานตามหัวข้อนี้ในแพตเทิร์นเดียวกันทั้งเล่ม
+
+````python
+prompt = ChatPromptTemplate.from_messages([
+    ("system", """วิเคราะห์โค้ดและตอบในรูปแบบ:
+
+    ## สรุป
+    [สรุปสั้นๆ]
+
+    ## ปัญหาที่พบ
+    - [ปัญหา 1]
+    - [ปัญหา 2]
+
+    ## แนวทางแก้ไข
+    ```python
+    [โค้ดที่แก้ไขแล้ว]
+    ```
+
+    ## คะแนน
+    [คะแนน 1-10] พร้อมเหตุผล"""),
+    ("human", "Review โค้ดนี้:\n```python\n{code}\n```"),
+])
+````
+
+---
+
+## สรุป
+
+| Component                  | ใช้เมื่อ                          | ตัวอย่าง               |
+| -------------------------- | --------------------------------- | ---------------------- |
+| **ChatPromptTemplate**     | สร้าง prompt ทุกครั้ง             | Template กับตัวแปร     |
+| **FewShotPrompt**          | ต้องการให้ AI เรียนรู้จากตัวอย่าง | แปลภาษา, จัด format    |
+| **StrOutputParser**        | ต้องการ text output               | สรุป, แปล, ตอบคำถาม    |
+| **PydanticOutputParser**   | ต้องการ structured object         | ดึงข้อมูล, วิเคราะห์   |
+| **with_structured_output** | ต้องการ structured data (แนะนำ!)  | ทุกกรณีที่ต้องการ JSON |
+
+---
+
+:::note[ต่อไป 🔗]
+เมื่อเข้าใจ Prompt Templates แล้ว ไปเรียนรู้การ **[สร้าง Chains ด้วย LCEL](/02-core/02-chains-lcel/)** ซึ่งเป็นหัวใจของ LangChain!
+:::

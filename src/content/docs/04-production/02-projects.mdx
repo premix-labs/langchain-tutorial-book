@@ -1,0 +1,517 @@
+---
+title: "บทที่ 11: โปรเจกต์ตัวอย่าง"
+description: "สร้างโปรเจกต์ AI จริง 3 โปรเจกต์ — Chatbot, RAG Q&A System, และ Multi-Agent Research Assistant"
+sidebar:
+  order: 11
+---
+
+import {
+  Aside,
+  Tabs,
+  TabItem,
+  Steps,
+  Card,
+  CardGrid,
+} from "@astrojs/starlight/components";
+
+## โปรเจกต์ในบทนี้
+
+<CardGrid>
+  <Card title="🤖 Project 1: AI Chatbot" icon="comment">
+    สร้าง Chatbot อเนกประสงค์พร้อม memory และ streaming
+  </Card>
+  <Card title="📚 Project 2: PDF Q&A" icon="open-book">
+    สร้าง RAG system ถาม-ตอบจากเอกสาร PDF
+  </Card>
+  <Card title="🔬 Project 3: Research Agent" icon="magnifier">
+    สร้าง Multi-Agent ที่ค้นคว้าและเขียนรายงาน
+  </Card>
+</CardGrid>
+
+---
+
+## Project 1: AI Chatbot พร้อม Streaming
+
+### สิ่งที่จะได้เรียนรู้
+
+- ✅ Chat Model + Memory
+- ✅ Streaming response
+- ✅ System prompt customization
+- ✅ FastAPI integration
+
+### Full Source Code
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python title="chatbot.py"
+import asyncio
+from langchain_openai import ChatOpenAI
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables.history import RunnableWithMessageHistory
+from langchain_community.chat_message_histories import ChatMessageHistory
+
+# ===== Configuration =====
+SYSTEM_PROMPT = """คุณคือ "น้องAI" — ผู้ช่วยอัจฉริยะ
+🎯 ตอบเป็นภาษาไทยเป็นหลัก
+💡 ให้ข้อมูลที่ถูกต้องและเป็นประโยชน์
+📝 ถ้าเป็นคำถามเกี่ยวกับโค้ด ให้ตัวอย่างพร้อมอธิบาย
+😊 สุภาพ เป็นมิตร และให้กำลังใจ"""
+
+# ===== Setup =====
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7, streaming=True)
+store = {}
+
+def get_history(session_id: str):
+    if session_id not in store:
+        store[session_id] = ChatMessageHistory()
+    return store[session_id]
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", SYSTEM_PROMPT),
+    MessagesPlaceholder(variable_name="history"),
+    ("human", "{input}"),
+])
+
+chain = prompt | llm | StrOutputParser()
+
+chatbot = RunnableWithMessageHistory(
+    chain, get_history,
+    input_messages_key="input",
+    history_messages_key="history",
+)
+
+# ===== Streaming Chat =====
+async def chat_stream(user_message: str, session_id: str = "default"):
+    config = {"configurable": {"session_id": session_id}}
+
+    print("🤖 น้องAI: ", end="", flush=True)
+    async for chunk in chatbot.astream(
+        {"input": user_message},
+        config=config,
+    ):
+        print(chunk, end="", flush=True)
+    print()  # newline
+
+# ===== Main Loop =====
+async def main():
+    print("=" * 50)
+    print("🤖 น้องAI พร้อมให้บริการ!")
+    print("💡 พิมพ์ 'quit' เพื่อออก")
+    print("=" * 50)
+
+    while True:
+        user_input = input("\n👤 คุณ: ")
+        if user_input.lower() in ["quit", "exit", "q"]:
+            print("👋 ลาก่อนครับ! แล้วพบกันใหม่นะ")
+            break
+        if not user_input.strip():
+            continue
+
+        await chat_stream(user_input)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### เพิ่ม FastAPI Endpoint
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python title="chatbot_api.py"
+from fastapi import FastAPI
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+app = FastAPI(title="น้องAI Chatbot API")
+
+class ChatRequest(BaseModel):
+    message: str
+    session_id: str = "default"
+
+@app.post("/chat")
+async def chat(request: ChatRequest):
+    config = {"configurable": {"session_id": request.session_id}}
+    result = chatbot.invoke(
+        {"input": request.message},
+        config=config,
+    )
+    return {"response": result}
+
+@app.post("/chat/stream")
+async def chat_stream_api(request: ChatRequest):
+    config = {"configurable": {"session_id": request.session_id}}
+
+    async def generate():
+        async for chunk in chatbot.astream(
+            {"input": request.message},
+            config=config,
+        ):
+            yield chunk
+
+    return StreamingResponse(generate(), media_type="text/plain")
+```
+
+---
+
+## Project 2: PDF Q&A System (RAG)
+
+### สิ่งที่จะได้เรียนรู้
+
+- ✅ Document loading + splitting
+- ✅ Vector store (ChromaDB)
+- ✅ RAG chain
+- ✅ Source citation
+
+### Full Source Code
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python title="pdf_qa.py"
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_community.document_loaders import PyPDFLoader, DirectoryLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import Chroma
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from pathlib import Path
+
+class PDFQASystem:
+    """ระบบถาม-ตอบจากเอกสาร PDF"""
+
+    def __init__(self, persist_dir: str = "./chroma_db"):
+        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        self.embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+        self.persist_dir = persist_dir
+        self.vectorstore = None
+        self.chain = None
+
+    def load_pdfs(self, pdf_path: str):
+        """โหลด PDF ไฟล์เดียวหรือทั้งโฟลเดอร์"""
+        path = Path(pdf_path)
+
+        if path.is_file():
+            print(f"📄 กำลังโหลด: {path.name}")
+            docs = PyPDFLoader(str(path)).load()
+        elif path.is_dir():
+            print(f"📁 กำลังโหลดโฟลเดอร์: {path}")
+            loader = DirectoryLoader(str(path), glob="**/*.pdf",
+                                      loader_cls=PyPDFLoader)
+            docs = loader.load()
+        else:
+            raise FileNotFoundError(f"ไม่พบ: {pdf_path}")
+
+        print(f"✅ โหลดได้ {len(docs)} หน้า")
+
+        # แบ่ง chunks
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200,
+            separators=["\n\n", "\n", ".", " "],
+        )
+        chunks = splitter.split_documents(docs)
+        print(f"📦 แบ่งเป็น {len(chunks)} chunks")
+
+        # สร้าง vector store
+        self.vectorstore = Chroma.from_documents(
+            documents=chunks,
+            embedding=self.embeddings,
+            persist_directory=self.persist_dir,
+        )
+        print("✅ สร้าง Vector Store เรียบร้อย!")
+
+        self._build_chain()
+
+    def load_existing(self):
+        """โหลด vector store ที่มีอยู่แล้ว"""
+        self.vectorstore = Chroma(
+            persist_directory=self.persist_dir,
+            embedding_function=self.embeddings,
+        )
+        self._build_chain()
+        print("✅ โหลด Vector Store เรียบร้อย!")
+
+    def _build_chain(self):
+        """สร้าง RAG chain"""
+        retriever = self.vectorstore.as_retriever(
+            search_type="similarity",
+            search_kwargs={"k": 4},
+        )
+
+        prompt = ChatPromptTemplate.from_template("""
+คุณเป็นผู้ช่วยตอบคำถามจากเอกสาร ตอบเป็นภาษาไทย
+
+กฎ:
+1. ตอบจากข้อมูลที่ให้เท่านั้น
+2. ถ้าไม่พบข้อมูล ให้บอกว่า "ไม่พบข้อมูลในเอกสาร"
+3. อ้างอิงแหล่งที่มา (ชื่อไฟล์, หน้า) เสมอ
+
+ข้อมูลอ้างอิง:
+{context}
+
+คำถาม: {question}
+
+คำตอบ (พร้อมอ้างอิง):
+""")
+
+        def format_docs(docs):
+            formatted = []
+            for doc in docs:
+                source = doc.metadata.get("source", "unknown")
+                page = doc.metadata.get("page", "?")
+                formatted.append(
+                    f"[📄 {Path(source).name} - หน้า {page + 1}]\n{doc.page_content}"
+                )
+            return "\n\n---\n\n".join(formatted)
+
+        self.chain = (
+            {"context": retriever | format_docs, "question": RunnablePassthrough()}
+            | prompt
+            | self.llm
+            | StrOutputParser()
+        )
+
+    def ask(self, question: str) -> str:
+        """ถามคำถาม"""
+        if not self.chain:
+            raise RuntimeError("กรุณา load เอกสารก่อน!")
+        return self.chain.invoke(question)
+
+# ===== ใช้งาน =====
+def main():
+    qa = PDFQASystem()
+
+    # โหลด PDF
+    qa.load_pdfs("./documents/")
+
+    # ถาม-ตอบ
+    print("\n" + "=" * 50)
+    print("📚 PDF Q&A System พร้อมใช้งาน!")
+    print("=" * 50)
+
+    while True:
+        question = input("\n❓ คำถาม: ")
+        if question.lower() in ["quit", "exit", "q"]:
+            break
+
+        print("\n💡 กำลังค้นหาคำตอบ...\n")
+        answer = qa.ask(question)
+        print(f"📝 คำตอบ:\n{answer}")
+
+if __name__ == "__main__":
+    main()
+```
+
+---
+
+## Project 3: Research Agent (Multi-Agent)
+
+### สิ่งที่จะได้เรียนรู้
+
+- ✅ LangGraph multi-agent
+- ✅ Custom tools
+- ✅ State management
+- ✅ Sequential agent workflow
+
+### Full Source Code
+
+คำอธิบาย: โค้ดตัวอย่างด้านล่างแสดงวิธีใช้งานด้วย Python ตามหัวข้อนี้แบบทีละขั้นตอน
+
+```python title="research_agent.py"
+from typing import TypedDict, Annotated
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.message import add_messages
+from langchain_openai import ChatOpenAI
+from langchain_core.messages import AIMessage, HumanMessage
+from langchain_community.tools import DuckDuckGoSearchRun
+from langchain_core.tools import tool
+from datetime import datetime
+
+# ===== State =====
+class ResearchState(TypedDict):
+    messages: Annotated[list, add_messages]
+    topic: str
+    research_data: str
+    draft: str
+    final_report: str
+    current_phase: str
+
+# ===== Tools =====
+search = DuckDuckGoSearchRun()
+
+@tool
+def web_search(query: str) -> str:
+    """ค้นหาข้อมูลจากอินเทอร์เน็ต"""
+    return search.invoke(query)
+
+# ===== Agents =====
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+
+def research_agent(state: ResearchState) -> dict:
+    """Agent 1: นักวิจัย — ค้นคว้าข้อมูล"""
+    print("🔍 [นักวิจัย] กำลังค้นคว้าข้อมูล...")
+
+    # ค้นหาข้อมูล
+    search_results = web_search.invoke({"query": state["topic"]})
+
+    response = llm.invoke([
+        ("system", """คุณเป็นนักวิจัยอาวุโส
+        - รวบรวมข้อมูลสำคัญ
+        - จัดหมวดหมู่ข้อมูล
+        - ระบุแหล่งข้อมูล"""),
+        ("human", f"""
+        หัวข้อวิจัย: {state['topic']}
+        ข้อมูลที่ค้นพบ: {search_results}
+
+        กรุณารวบรวมและจัดหมวดหมู่ข้อมูลที่สำคัญ
+        """),
+    ])
+
+    return {
+        "messages": [response],
+        "research_data": response.content,
+        "current_phase": "research_complete",
+    }
+
+def writer_agent(state: ResearchState) -> dict:
+    """Agent 2: นักเขียน — เขียนรายงาน"""
+    print("✍️ [นักเขียน] กำลังเขียนรายงาน...")
+
+    response = llm.invoke([
+        ("system", """คุณเป็นนักเขียนมืออาชีพ
+        - เขียนบทความที่อ่านง่าย
+        - มีโครงสร้างชัดเจน (บทนำ, เนื้อหา, สรุป)
+        - ใช้ภาษาไทยที่สละสลวย"""),
+        ("human", f"""
+        หัวข้อ: {state['topic']}
+        ข้อมูลจากการวิจัย:
+        {state['research_data']}
+
+        กรุณาเขียนบทความจากข้อมูลนี้
+        """),
+    ])
+
+    return {
+        "messages": [response],
+        "draft": response.content,
+        "current_phase": "writing_complete",
+    }
+
+def editor_agent(state: ResearchState) -> dict:
+    """Agent 3: บรรณาธิการ — ตรวจแก้และปรับปรุง"""
+    print("📝 [บรรณาธิการ] กำลังตรวจแก้...")
+
+    response = llm.invoke([
+        ("system", """คุณเป็นบรรณาธิการมืออาชีพ
+        - ตรวจสอบความถูกต้อง
+        - ปรับปรุงภาษาให้สมบูรณ์
+        - เพิ่มสรุปและข้อเสนอแนะ
+        - ให้คะแนนความสมบูรณ์ 1-10"""),
+        ("human", f"""
+        บทความฉบับร่าง:
+        {state['draft']}
+
+        กรุณาตรวจแก้และปรับปรุงให้สมบูรณ์
+        """),
+    ])
+
+    return {
+        "messages": [response],
+        "final_report": response.content,
+        "current_phase": "editing_complete",
+    }
+
+# ===== Build Graph =====
+graph = StateGraph(ResearchState)
+
+# เพิ่ม nodes
+graph.add_node("researcher", research_agent)
+graph.add_node("writer", writer_agent)
+graph.add_node("editor", editor_agent)
+
+# เพิ่ม edges
+graph.add_edge(START, "researcher")
+graph.add_edge("researcher", "writer")
+graph.add_edge("writer", "editor")
+graph.add_edge("editor", END)
+
+# Compile
+app = graph.compile()
+
+# ===== ใช้งาน =====
+def research(topic: str) -> str:
+    """เริ่มกระบวนการวิจัย"""
+    print(f"\n{'='*50}")
+    print(f"🔬 เริ่มวิจัยหัวข้อ: {topic}")
+    print(f"{'='*50}\n")
+
+    result = app.invoke({
+        "messages": [HumanMessage(content=f"วิจัยเรื่อง: {topic}")],
+        "topic": topic,
+        "research_data": "",
+        "draft": "",
+        "final_report": "",
+        "current_phase": "start",
+    })
+
+    print(f"\n{'='*50}")
+    print("✅ วิจัยเสร็จสมบูรณ์!")
+    print(f"{'='*50}\n")
+
+    return result["final_report"]
+
+# Main
+if __name__ == "__main__":
+    topic = input("🔬 หัวข้อที่ต้องการวิจัย: ")
+    report = research(topic)
+
+    print("\n📋 รายงานฉบับสมบูรณ์:")
+    print("=" * 50)
+    print(report)
+
+    # บันทึกไฟล์
+    filename = f"report_{datetime.now():%Y%m%d_%H%M}.md"
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write(f"# {topic}\n\n{report}")
+    print(f"\n💾 บันทึกเป็น: {filename}")
+```
+
+---
+
+## สรุปสิ่งที่ได้เรียนรู้
+
+<CardGrid>
+  <Card title="📘 พื้นฐาน" icon="open-book">
+    LLMs, Chat Models, Prompt Templates, Output Parsers
+  </Card>
+  <Card title="📗 Core" icon="puzzle">
+    LCEL Chains, Memory, Streaming, Error Handling
+  </Card>
+  <Card title="📕 Advanced" icon="rocket">
+    RAG, Agents, Tools, LangGraph Multi-Agent
+  </Card>
+  <Card title="🚀 Production" icon="setting">
+    LangServe, Docker, LangSmith, Testing, Cost Optimization
+  </Card>
+</CardGrid>
+
+---
+
+## แหล่งเรียนรู้เพิ่มเติม
+
+| แหล่ง            | ลิงก์                                                                         | คำอธิบาย               |
+| ---------------- | ----------------------------------------------------------------------------- | ---------------------- |
+| LangChain Docs   | [python.langchain.com](https://python.langchain.com/)                         | เอกสารอย่างเป็นทางการ  |
+| LangGraph Docs   | [langchain-ai.github.io/langgraph](https://langchain-ai.github.io/langgraph/) | เอกสาร LangGraph       |
+| LangSmith        | [smith.langchain.com](https://smith.langchain.com/)                           | Monitoring & Debugging |
+| LangChain GitHub | [github.com/langchain-ai](https://github.com/langchain-ai)                    | Source code & issues   |
+| LangChain Blog   | [blog.langchain.dev](https://blog.langchain.dev/)                             | ข่าวสารและ tutorials   |
+
+---
+
+<Aside type="tip" title="🎉 ยินดีด้วย!">
+  คุณเรียนจบหนังสือ **LangChain คู่มือฉบับสมบูรณ์** แล้ว!
+  ตอนนี้คุณมีความรู้ที่จะสร้าง AI Application ระดับ Production ได้แล้ว
+  ขอให้สนุกกับการสร้างสิ่งใหม่ๆ! 🚀
+</Aside>
